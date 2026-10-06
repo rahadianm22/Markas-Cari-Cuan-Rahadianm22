@@ -524,7 +524,7 @@ function planNext(ag){
   ag.path = [...pts, STATION[ag.next]].map(p => p.clone().add(ag.off));
   ag.mode = 'walk';
 }
-/* ---------- PERBURUAN NYATA: Indeed (konektor) + penilaian Claude ---------- */
+/* ---------- PERBURUAN NYATA: /api/jobs + penilaian Claude ---------- */
 let mcpNs = null, sampleNs = null, dlNs = null;
 const hunt = { on: false, busy: false, scoring: false, last: 0, error: '', note: '', sampleOff: false, sampleNote: '', who: null };
 if (window.claude && window.claude.use){
@@ -532,6 +532,7 @@ if (window.claude && window.claude.use){
   window.claude.use('sample').then(n => { sampleNs = n; }).catch(() => {});
   window.claude.use('downloads').then(n => { dlNs = n; }).catch(() => {});
 }
+const REGIONS = ['australia', 'malaysia'];
 const jobKey = j => (j.url || `${j.company}|${j.title}`).toLowerCase();
 function parseJobs(text){
   return String(text).split(/\*\*Job Title:\*\*/).slice(1).map(chunk => {
@@ -554,7 +555,7 @@ function quickScore(j){
   const det = (j.detail || '').toLowerCase();
   if (det){
     const basedIn = (det.match(/(?:based in|located in|relocat)[^.\n]{0,70}/) || [''])[0];
-    if (basedIn && !/indonesia|jakarta|tangerang|remote|asia/.test(basedIn)){ s -= 30; why.push('syarat lokasi di luar Indonesia'); }
+    if (basedIn && !/australia|malaysia|kuala lumpur|sydney|melbourne|remote|asia|apac/.test(basedIn)){ s -= 30; why.push('syarat lokasi di luar Australia/Malaysia'); }
     if (/design system|tokens|component librar/.test(det)){ s += 6; why.push('menyebut design system'); }
     if (/fintech|banking|bank|payment|lending|kredit/.test(det)){ s += 6; why.push('domain fintech'); }
   }
@@ -569,53 +570,37 @@ const MCP_COPY = {
   approval_required: 'Pencarian Indeed perlu persetujuan organisasi.',
   not_granted: 'Halaman ini tidak punya akses konektor di tampilan ini.',
   capability_disabled: 'Konektor tidak bisa dipakai di tampilan ini.',
-  server_unavailable: 'Indeed sedang tidak merespons. Rani mencoba lagi di putaran berikutnya.'
+  server_unavailable: 'Indeed sedang tidak merespons. Zeta mencoba lagi di putaran berikutnya.'
 };
 async function runSearch(ag){
-  if (!mcpNs){ stopHunt('Pencarian Indeed hanya tersedia di versi artifact claude.ai (lewat konektor Indeed). Di versi web ini, kanban, agen, dan pencatatan tetap jalan.'); return; }
   const hc = ag.cfg.hunt, H = CONFIG.hunt, lane = hc.lane || 'kerja';
-  const cfg = state.huntCfg[ag.cfg.id] || { queries: hc.queries, locations: hc.locations };
+  const cfg = { ...(state.huntCfg[ag.cfg.id] || { queries: hc.queries }) };
+  cfg.locations = (cfg.locations || []).filter(l => REGIONS.includes(l.toLowerCase()));
+  if (!cfg.locations.length) cfg.locations = hc.locations;
   hunt.last = performance.now();
   if (!cfg.queries.length || !cfg.locations.length){ logAgent(ag, 'Kata kunci atau lokasi kosong, pencarian dilewati'); return; }
   const idx = state.huntIdx[ag.cfg.id] || 0, n = cfg.queries.length;
   const q = cfg.queries[idx % n], loc = cfg.locations[Math.floor(idx / n) % cfg.locations.length];
   state.huntIdx[ag.cfg.id] = idx + 1; hunt.busy = true; hunt.who = ag; ag.hold = true;
-  ag.task = `Mencari "${q}" di Indeed (${loc}${hc.jobType ? ', kontrak' : ''})`; logAgent(ag, ag.task);
+  ag.task = `Mencari "${q}" di ${loc}${hc.jobType ? ' (kontrak)' : ''}`; logAgent(ag, ag.task);
   try {
-    const input = { country_code: H.country, location: loc, search: q }; if (hc.jobType) input.job_type = hc.jobType;
-    const res = await mcpNs.callTool('Indeed', 'search_jobs', input);
-    const text = typeof res.payload === 'string' ? res.payload : (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
-    const jobs = parseJobs(text), known = new Set(state.found.map(jobKey));
+    const params = new URLSearchParams({ q, loc }); if (hc.jobType) params.set('type', hc.jobType);
+    const resp = await fetch('/api/jobs?' + params), data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw Object.assign(new Error(data.error || 'HTTP ' + resp.status), { code: 'fetch_error', retryable: resp.status >= 500 });
+    const jobs = data.jobs || [], known = new Set(state.found.map(jobKey));
     let added = 0;
     jobs.forEach(j => { const k = jobKey(j); if (known.has(k)) return; known.add(k); added++;
       state.found.push({ ...j, key: k, ...quickScore(j), by: 'quick', status: 'new', query: q, agent: ag.cfg.id, lane, foundAt: Date.now() }); });
     state.found = state.found.slice(-200);
     state.stats.searches++; state.stats.lastAt = Date.now();
     hunt.error = ''; saveState(); refreshTextures();
-    logAgent(ag, `Indeed "${q}" (${loc}): ${jobs.length} hasil, ${added} baru`);
-    // baca detail lowongan teratas dari pencarian ini
-    const fresh = state.found.filter(f => f.status === 'new' && f.agent === ag.cfg.id && f.query === q && !f.detail && f.jobId && f.foundAt > Date.now() - 60000)
-      .sort((a, b) => b.score - a.score).slice(0, 3);
-    for (const f of fresh){
-      if (!hunt.on) break;
-      ag.task = `Membaca detail ${f.title} di ${f.company}`;
-      try {
-        const r = await mcpNs.callTool('Indeed', 'get_job_details', { job_id: f.jobId });
-        const t = typeof r.payload === 'string' ? r.payload : (r.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
-        const comp = (t.match(/\*\*Company:\*\*\s*([^\n]+)/) || [])[1];
-        if (comp && comp.trim().toLowerCase() === f.company.toLowerCase()){
-          const body = t.split(/\*\*Compensation:\*\*[^\n]*\n/)[1] || t;
-          f.detail = body.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 2200);
-          Object.assign(f, quickScore(f)); f.by = 'quick';
-        }
-      } catch (e) { if (e && !['tool_error', 'server_unavailable', 'upstream_error'].includes(e.code)) throw e; }
-    }
+    logAgent(ag, `"${q}" (${loc}): ${jobs.length} hasil, ${added} baru`);
     ag.task = 'Melapor temuan ke papan War Room';
     saveState(); refreshTextures();
     const min = H.minToast, great = state.found.filter(f => f.status === 'new' && f.score >= min && f.foundAt > Date.now() - 120000 && f.agent === ag.cfg.id);
     if (great.length){ toast(`${ag.cfg.name} menemukan ${great.length} ${lane === 'freelance' ? 'peluang kontrak' : 'lowongan'} dengan skor ${min}+`, lane === 'freelance' ? 'free' : 'war'); ping(); }
   } catch (e) {
-    const code = e && e.code, msg = MCP_COPY[code] || (code === 'tool_error' ? 'Indeed menolak pencarian: ' + e.message : 'Pencarian gagal: ' + (e && e.message || 'galat tidak dikenal'));
+    const code = e && e.code, msg = MCP_COPY[code] || (code === 'fetch_error' ? 'Sumber lowongan bermasalah: ' + e.message : 'Pencarian gagal: ' + (e && e.message || 'galat tidak dikenal'));
     if (e && e.retryable){ hunt.error = msg; logAgent(ag, msg); } else stopHunt(msg);
   } finally {
     hunt.busy = false; ag.hold = false; hunt.last = performance.now(); refreshHuntUI();
@@ -628,7 +613,7 @@ async function runScoring(ag){
   const prompt = `Kamu menilai kecocokan lowongan untuk satu kandidat. CV kandidat:
 ${CONFIG.cv}
 
-Catatan: kandidat tinggal di Jakarta dan tidak berencana pindah negara; lowongan remote hanya cocok bila menerima kandidat dari Indonesia. Bahasa Inggris tingkat menengah, jadi peran yang menuntut bahasa Inggris sangat fasih dinilai lebih rendah. Lowongan bertanda [KONTRAK] adalah peluang freelance atau kontrak remote.
+Catatan: kandidat mencari kerja di Malaysia atau Australia (termasuk relokasi) dan boleh remote bila menerima kandidat dari kawasan itu. Bahasa Inggris tingkat menengah, jadi peran yang menuntut bahasa Inggris sangat fasih dinilai lebih rendah. Lowongan bertanda [KONTRAK] adalah peluang freelance atau kontrak remote.
 Lowongan:
 ${batch.map((j, i) => `${i}. ${j.lane === 'freelance' ? '[KONTRAK] ' : ''}${j.title} di ${j.company}, ${j.location}, diposting ${j.posted || 'tidak diketahui'}${j.detail ? '\n   Detail: ' + j.detail.slice(0, 900).replace(/\s+/g, ' ') : ''}`).join('\n')}
 Nilai berdasarkan level senior, domain fintech dan perbankan, kecocokan dengan pengalaman nyata di CV, syarat lokasi, dan umur posting.
@@ -644,7 +629,7 @@ Balas HANYA array JSON: [{"i":0,"score":0-100,"reason":"alasan singkat bahasa In
     hunt.sampleOff = true;
     hunt.sampleNote = e && e.code === 'rate_limited' ? 'Penilaian Claude dihentikan karena batas pemakaian. Skor cepat tetap dipakai.'
       : e && ['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled'].includes(e.code) ? 'Penilaian Claude tidak diizinkan di tampilan ini. Skor cepat tetap dipakai.'
-      : 'Penilaian Claude gagal, jadi Bima memakai skor cepat. Klik "Nilai ulang dengan Claude" untuk mencoba lagi.';
+      : 'Penilaian Claude gagal, jadi Vestia memakai skor cepat. Klik "Nilai ulang dengan Claude" untuk mencoba lagi.';
     logAgent(ag, hunt.sampleNote);
   } finally { hunt.scoring = false; ag.hold = false; refreshHuntUI(); }
   return true;
@@ -1060,8 +1045,7 @@ setTimeout(() => {
   const fresh = last ? state.found.filter(f => f.foundAt > last && f.status === 'new') : [];
   const top = fresh.reduce((m, f) => Math.max(m, f.score || 0), 0);
   if (fresh.length) toast(`Sejak kunjungan terakhir: ${fresh.length} lowongan baru, skor tertinggi ${top}.`, 'war', 'Lihat');
-  if (state.huntWanted && mcpNs) startHunt();
-  else if (state.huntWanted) toast('Perburuan sebelumnya butuh konektor Indeed (hanya di claude.ai).', null, 'Tutup', () => {}, true);
+  if (state.huntWanted) startHunt();
   stampVisit();
 }, 1800);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closePanel(); });
@@ -1107,7 +1091,7 @@ function findCard(f){
   return `<div class="find"><div class="find-top"><span class="score" style="background:${scoreBg(f.score)}" title="${f.by === 'claude' ? 'Dinilai Claude' : 'Skor cepat'}">${f.score}</span>
     <div><h4>${esc(f.title)}</h4><div class="meta">${esc(f.company)}, ${esc(f.location)}${f.posted ? ', diposting ' + esc(f.posted) : ''}${f.type ? ', ' + esc(f.type) : ''}${f.comp ? ', ' + esc(f.comp) : ''}</div></div></div>
     <p class="why">${esc(f.reason)}</p>${f.detail ? '<span class="tag">Detail sudah dibaca</span>' : ''}${fl ? '<span class="lane">Kontrak / freelance</span>' : ''}
-    <div class="row">${safeUrl(f.url) ? `<a class="btn small" href="${esc(f.url)}" target="_blank" rel="noopener">Buka di Indeed</a>` : ''}
+    <div class="row">${safeUrl(f.url) ? `<a class="btn small" href="${esc(f.url)}" target="_blank" rel="noopener">Buka lowongan</a>` : ''}
       ${sampleNs ? `<button class="btn small" data-action="cover" data-key="${esc(f.key)}">${has ? 'Lihat draft' : fl ? 'Draft proposal' : 'Draft surat lamaran'}</button>` : ''}
       <button class="btn primary small" data-action="keep" data-key="${esc(f.key)}">${fl ? 'Simpan' : 'Tambah ke Incaran'}</button>
       <button class="btn ghost small" data-action="dismiss" data-key="${esc(f.key)}">Abaikan</button></div></div>`;
@@ -1156,9 +1140,9 @@ const RENDER = {
     const list = all.filter(f => f.score >= findFilter).sort((a, b) => b.score - a.score).slice(0, 25);
     const hunters = agents.filter(a => a.cfg.hunt);
     const findHtml = `<div class="hunt">
-        <div class="hunt-status"><span class="pulse${hunt.on ? ' on' : ''}"></span>${hunt.busy && hunt.who ? esc(hunt.who.cfg.name) + ' sedang mencari di Indeed' : hunt.on ? 'Perburuan otomatis aktif' : 'Perburuan otomatis mati'}</div>
+        <div class="hunt-status"><span class="pulse${hunt.on ? ' on' : ''}"></span>${hunt.busy && hunt.who ? esc(hunt.who.cfg.name) + ' sedang mencari lowongan' : hunt.on ? 'Perburuan otomatis aktif' : 'Perburuan otomatis mati'}</div>
         <p class="muted" style="font-size:13px!important">${state.stats.searches} pencarian, terakhir ${ago(state.stats.lastAt)}.</p>
-        <details class="how"><summary>Cara kerja agen</summary><p>${hunters.map(a => esc(a.cfg.name)).join(', ')} mencari di Indeed bergantian tiap tiba di War Room (paling cepat tiap ${H.intervalSec} detik) dan membaca detail 3 lowongan teratas. Rani dan Sari memburu pekerjaan tetap, Nia khusus kontrak dan freelance remote. Bima menilai kecocokannya dengan CV-mu memakai Claude. Agen tidak melamar atas namamu.</p></details>
+        <details class="how"><summary>Cara kerja agen</summary><p>${hunters.map(a => esc(a.cfg.name)).join(', ')} mencari lowongan (Adzuna, Jobicy, Himalayas, RemoteOK) bergantian tiap tiba di War Room (paling cepat tiap ${H.intervalSec} detik) dan membaca detail 3 lowongan teratas. Zeta dan Jetto memburu pekerjaan tetap, Asuka khusus kontrak dan freelance remote. Vestia menilai kecocokannya dengan CV-mu memakai Claude. Agen tidak melamar atas namamu.</p></details>
         <details class="how"><summary>Atur kata kunci pencarian</summary>
           ${hunters.map(a => { const c = state.huntCfg[a.cfg.id] || { queries: [], locations: [] }; return `<div class="cfgbox"><strong style="font-size:14px">${esc(a.cfg.name)}, ${esc(a.cfg.role)}</strong>
             <label>Kata kunci (satu per baris)<textarea id="hq-${a.cfg.id}" rows="4" data-action="hq" data-id="${a.cfg.id}">${esc(c.queries.join('\n'))}</textarea></label>
@@ -1167,7 +1151,7 @@ const RENDER = {
         <div class="row"><button class="btn ${hunt.on ? '' : 'primary'} small" data-action="hunt">${hunt.on ? 'Hentikan perburuan' : 'Mulai berburu kerja'}</button>
         ${list.some(f => f.by !== 'claude') && sampleNs ? '<button class="btn small" data-action="rescore">Nilai ulang dengan Claude</button>' : ''}
         ${state.found.length && dlNs ? '<button class="btn small" data-action="export">Unduh daftar (CSV)</button>' : ''}
-        ${sampleNs && (state.found.length || state.jobs.length) ? `<button class="btn small" data-action="advice" ${advice.busy ? 'disabled' : ''}>${advice.busy ? 'Bima sedang berpikir…' : 'Minta saran langkah berikutnya'}</button>` : ''}</div>
+        ${sampleNs && (state.found.length || state.jobs.length) ? `<button class="btn small" data-action="advice" ${advice.busy ? 'disabled' : ''}>${advice.busy ? 'Vestia sedang berpikir…' : 'Minta saran langkah berikutnya'}</button>` : ''}</div>
         ${advice.text ? `<div class="advice">${esc(advice.text)}</div>` : ''}${advice.err ? `<div class="alert">${esc(advice.err)}</div>` : ''}
         ${hunt.error ? `<div class="alert">${esc(hunt.error)}</div>` : ''}
         ${hunt.sampleNote ? `<div class="alert">${esc(hunt.sampleNote)}</div>` : ''}
@@ -1199,8 +1183,8 @@ const RENDER = {
       ${sampleNs ? `<div class="row" style="margin-top:0"><button class="btn small" data-action="upwork">Buat bio Upwork</button></div>
         <div class="form" style="grid-template-columns:1fr auto"><select id="capProduct" aria-label="Produk untuk caption Dribbble">${prodOpts}</select><button class="btn small" data-action="dribbble">Caption Dribbble</button></div>`
         : '<p class="empty">Fitur ini butuh akses Claude di tampilan ini.</p>'}
-      <h3>Peluang kontrak dari Nia <span class="count">${gigs.length}</span></h3>
-      ${gigs.length ? gigs.map(findCard).join('') : `<p class="empty">${hunt.on ? 'Nia belum menemukan peluang kontrak.' : 'Mulai perburuan supaya Nia mencari proyek kontrak remote.'}</p>`}
+      <h3>Peluang kontrak dari Asuka <span class="count">${gigs.length}</span></h3>
+      ${gigs.length ? gigs.map(findCard).join('') : `<p class="empty">${hunt.on ? 'Asuka belum menemukan peluang kontrak.' : 'Mulai perburuan supaya Asuka mencari proyek kontrak remote.'}</p>`}
       ${kept.length ? `<h3>Disimpan <span class="count">${kept.length}</span></h3>${kept.map(x => `<div class="job"><div><strong>${esc(x.company)}</strong><span>${esc(x.title)}</span></div>${safeUrl(x.url) ? `<a class="btn small" href="${esc(x.url)}" target="_blank" rel="noopener">Buka</a>` : ''}</div>`).join('')}` : ''}
       <h3>Checklist portfolio <span class="count">${done}/${f.checklist.length}</span></h3>
       <div class="bar"><i style="width:${f.checklist.length ? done / f.checklist.length * 100 : 0}%"></i></div>

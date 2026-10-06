@@ -12,7 +12,7 @@ const CONFIG = {
     tagline: 'Produk fintech dan perbankan: workflow multi-role, dashboard operasional, dan design system.',
     skills: ['Design system', 'Design tokens', 'Workflow multi-role', 'Dashboard data-heavy', 'Usability testing', 'Design QA', 'Figma-to-code (Claude Code)', 'Fintech & banking']
   },
-  // Ringkasan CV: dipakai Bima untuk menilai lowongan dan oleh Claude untuk menulis draft
+  // Ringkasan CV: dipakai Vestia untuk menilai lowongan dan oleh Claude untuk menulis draft
   cv: `Rahadian Maulana, Senior Product Designer, 5+ years in regulated fintech and digital banking, Jakarta, Indonesia. Languages: Indonesian (native), English (intermediate). Email rahadianm22@gmail.com, site rahadianm22.my.id.
 Strengths: untangling fragmented, highly technical requirements into product logic for both end users and back-office operators: multi-role approval flows, dense operational dashboards, edge-case mapping, design token architecture, design QA, usability testing. Picking up AI-assisted design-to-code (Claude Code) and enough front-end coding to prototype interactions.
 Experience:
@@ -69,14 +69,14 @@ Tools: Figma, FigJam, Variable Tokens, Auto Layout, Jira, Confluence, Notion, Ad
   hunt: { country: 'ID', intervalSec: 60, minToast: 75, staleDays: 7 },
   // Agen yang bergerak sendiri. zones = zona yang mereka kunjungi bergiliran
   agents: [
-    { id: 'scout', name: 'Rani', role: 'Pemburu loker (Indeed)', color: '#F0A30A', zones: ['war', 'lobby', 'hall'],
-      hunt: { lane: 'kerja', queries: ['Senior Product Designer', 'Product Designer', 'UI UX Designer', 'Design System', 'Product Owner'], locations: ['Jakarta', 'Tangerang', 'remote'] } },
-    { id: 'explorer', name: 'Sari', role: 'Pemburu fintech dan bank', color: '#8B5CF6', zones: ['war', 'hall', 'free'],
-      hunt: { lane: 'kerja', queries: ['Product Designer fintech', 'Product Designer bank', 'Design System Designer', 'UX Designer lending', 'Lead Product Designer', 'Product Designer Jago', 'Product Designer Kredivo', 'Product Designer Akulaku', 'Product Designer DANA', 'Product Designer GoTo Financial'], locations: ['Jakarta', 'remote'] } },
-    { id: 'freelancer', name: 'Nia', role: 'Pemburu kontrak dan freelance', color: '#14B8C4', zones: ['war', 'free', 'lab'],
-      hunt: { lane: 'freelance', jobType: 'contract', queries: ['Product Designer', 'UI UX Designer', 'Design System', 'UX Designer'], locations: ['remote', 'Jakarta'] } },
-    { id: 'curator', name: 'Bima', role: 'Penilai kecocokan', color: '#E9578F', zones: ['war', 'hall', 'free'] },
-    { id: 'builder', name: 'Sekar', role: 'Builder side project', color: '#3D74E8', zones: ['lab', 'free'] },
-    { id: 'treasurer', name: 'Dodi', role: 'Bendahara cuan', color: '#1FAE5E', zones: ['vault', 'war', 'lobby'] }
+    { id: 'scout', name: 'Zeta', role: 'Pemburu loker (Indeed)', color: '#8A8F98', zones: ['war', 'lobby', 'hall'],
+      hunt: { lane: 'kerja', queries: ['Product Designer', 'UI UX Designer'], locations: ['Australia', 'Malaysia'] } },
+    { id: 'explorer', name: 'Jetto', role: 'Pemburu fintech dan bank', color: '#B79CED', zones: ['war', 'hall', 'free'],
+      hunt: { lane: 'kerja', queries: ['Senior Product Designer', 'Lead Product Designer', 'UX Designer', 'UI Designer'], locations: ['Australia', 'Malaysia'] } },
+    { id: 'freelancer', name: 'Asuka', role: 'Pemburu kontrak dan freelance', color: '#5B2A9E', zones: ['war', 'free', 'lab'],
+      hunt: { lane: 'freelance', jobType: 'contract', queries: ['Product Designer', 'UI UX Designer', 'Design System', 'UX Designer'], locations: ['Australia', 'Malaysia'] } },
+    { id: 'curator', name: 'Vestia', role: 'Penilai kecocokan', color: '#1A1A1F', zones: ['war', 'hall', 'free'] },
+    { id: 'builder', name: 'Fumika', role: 'Builder side project', color: '#7CC8F2', zones: ['lab', 'free'] },
+    { id: 'treasurer', name: 'Sagisawa', role: 'Bendahara cuan', color: '#1B3A8C', zones: ['vault', 'war', 'lobby'] }
   ]
 };
